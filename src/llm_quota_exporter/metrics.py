@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Iterable
 
 from prometheus_client.core import GaugeMetricFamily
@@ -75,7 +76,15 @@ class QuotaCollector(Collector):
                     last_success.add_metric([name], state.last_success)
                 if state.last_duration is not None:
                     duration.add_metric([name], state.last_duration)
-                if state.snapshot is None:
+                # Retain diagnostics on failure, but never present old usage
+                # as a current measurement. Also expire a stalled poller's
+                # snapshot after two polling intervals (minimum one minute).
+                if (
+                    state.snapshot is None
+                    or state.last_error is not None
+                    or state.last_success is None
+                    or time.time() - state.last_success > max(60.0, 2 * self._poller.interval)
+                ):
                     continue
                 snapshot = state.snapshot
                 info.add_metric(

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import re
 import signal
 import sys
 from pathlib import Path
@@ -15,6 +16,7 @@ from . import __version__
 from .metrics import QuotaCollector
 from .poller import Poller, ProviderState
 from .providers import PROVIDERS
+from .providers.openai_codex import OpenAICodexProvider
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"comma-separated subset of providers (default: all of {','.join(sorted(PROVIDERS))})",
     )
     parser.add_argument(
+        "--openai-account",
+        action="append",
+        type=parse_openai_account,
+        default=[],
+        metavar="NAME=CODEX_HOME",
+        help="named account and credential directory; repeat for multiple accounts, replacing default openai",
+    )
+    parser.add_argument(
         "--once",
         action="store_true",
         help="poll every provider once, print metrics to stdout and exit",
@@ -55,6 +65,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-level", default="info", choices=["debug", "info", "warning", "error"])
     parser.add_argument("--version", action="version", version=USER_AGENT)
     return parser
+
+
+def parse_openai_account(value: str) -> tuple[str, Path]:
+    name, sep, directory = value.partition("=")
+    if not sep or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", name) or not directory:
+        raise argparse.ArgumentTypeError("expected NAME=CODEX_HOME with a lowercase alphanumeric/hyphen name")
+    path = Path(directory).expanduser()
+    if not path.is_absolute():
+        raise argparse.ArgumentTypeError("CODEX_HOME must be an absolute directory path")
+    return name, path
 
 
 def select_providers(spec: str) -> list[str]:
@@ -68,7 +88,16 @@ def select_providers(spec: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    names = select_providers(args.providers)
+    if args.openai_account and "openai" not in names:
+        parser.error("--openai-account requires openai in --providers")
+    accounts = dict(args.openai_account)
+    if len(accounts) != len(args.openai_account):
+        parser.error("--openai-account names must be unique")
+    if args.interval <= 0:
+        parser.error("--interval must be positive")
     logging.basicConfig(
         level=args.log_level.upper(),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -79,10 +108,17 @@ def main(argv: list[str] | None = None) -> int:
         headers={"User-Agent": USER_AGENT},
         follow_redirects=True,
     ) as client:
-        states = [
-            ProviderState(provider=PROVIDERS[name](home=args.home, client=client))
-            for name in select_providers(args.providers)
-        ]
+        states = []
+        for name in names:
+            if name == "openai" and accounts:
+                states.extend(
+                    ProviderState(provider=OpenAICodexProvider(
+                        home=args.home, client=client, account=account, codex_home=directory
+                    ))
+                    for account, directory in accounts.items()
+                )
+            else:
+                states.append(ProviderState(provider=PROVIDERS[name](home=args.home, client=client)))
         poller = Poller(states=states, interval=args.interval)
 
         registry = CollectorRegistry()

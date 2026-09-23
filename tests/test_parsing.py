@@ -1,15 +1,27 @@
 """Parser tests using response fixtures shaped like the real provider APIs."""
 
+import time
+from typing import ClassVar
+
 import pytest
 
 from llm_quota_exporter._time import parse_iso8601
 from llm_quota_exporter.providers.anthropic import _parse_spend
 from llm_quota_exporter.providers.anthropic import _parse_usage as parse_anthropic
-from llm_quota_exporter.providers.gemini import _parse_buckets, _parse_summary
+from llm_quota_exporter.providers.deepseek import _parse_balance as parse_ds_balance
+from llm_quota_exporter.providers.gemini import (
+    Credentials,
+    _parse_antigravity_credentials,
+    _parse_legacy_credentials,
+    _parse_plan,
+    _parse_summary,
+)
 from llm_quota_exporter.providers.grok import _parse_monthly, _parse_weekly
 from llm_quota_exporter.providers.kimi import _parse_usages
 from llm_quota_exporter.providers.openai_codex import _parse_credits
 from llm_quota_exporter.providers.openai_codex import _parse_usage as parse_codex
+from llm_quota_exporter.providers.openrouter import _parse_credits as parse_or_credits
+from llm_quota_exporter.providers.openrouter import _parse_key as parse_or_key
 
 
 def by_key(samples):
@@ -205,6 +217,51 @@ class TestGrok:
         assert _parse_weekly({}) == []
 
 
+class TestOpenRouter:
+    def test_credits(self):
+        (sample,) = parse_or_credits({"data": {"total_credits": 50, "total_usage": 12.5}})
+        assert (sample.window, sample.scope) == ("credits", "all")
+        assert sample.utilization == pytest.approx(0.25)
+        assert sample.used == pytest.approx(12.5)
+        assert sample.limit == 50
+
+    def test_credits_absent_or_unpurchased(self):
+        assert parse_or_credits({}) == []
+        assert parse_or_credits({"data": {"total_credits": 0, "total_usage": 0}}) == []
+
+    def test_key_limit_is_scoped_to_its_reset_window(self):
+        # `usage` is lifetime spend; charging it against a daily `limit` would
+        # incorrectly count usage from earlier periods.
+        payload = {
+            "data": {
+                "limit": 50,
+                "limit_reset": "daily",
+                "limit_remaining": 40,
+                "usage": 35,
+                "usage_daily": 10,
+            }
+        }
+        (sample,) = parse_or_key(payload)
+        assert sample.window == "daily"
+        assert sample.used == pytest.approx(10)
+        assert sample.utilization == pytest.approx(0.2)
+
+    def test_key_falls_back_to_period_usage(self):
+        payload = {"data": {"limit": 20, "limit_reset": "weekly", "usage_weekly": 5, "usage": 99}}
+        (sample,) = parse_or_key(payload)
+        assert sample.window == "weekly"
+        assert sample.utilization == pytest.approx(0.25)
+
+    def test_key_lifetime_cap(self):
+        (sample,) = parse_or_key({"data": {"limit": 100, "usage": 25}})
+        assert sample.window == "key"
+        assert sample.utilization == pytest.approx(0.25)
+
+    def test_uncapped_key_emits_nothing(self):
+        assert parse_or_key({"data": {"limit": None, "usage": 10}}) == []
+        assert parse_or_key({}) == []
+
+
 class TestKimi:
     def test_full_response(self):
         payload = {
@@ -251,46 +308,157 @@ class TestKimi:
 
 
 class TestGemini:
+    # Synthetic quota-summary fixture; no captured account data.
+    SUMMARY: ClassVar[dict] = {
+        "groups": [
+            {
+                "buckets": [
+                    {
+                        "bucketId": "gemini-weekly",
+                        "displayName": "Weekly Limit Remaining",
+                        "window": "weekly",
+                        "resetTime": "2030-01-08T00:00:00Z",
+                        "remainingFraction": 0.75,
+                    },
+                    {
+                        "bucketId": "gemini-5h",
+                        "displayName": "Five Hour Limit Remaining",
+                        "window": "5h",
+                        "resetTime": "2030-01-01T05:00:00Z",
+                        "remainingFraction": 0.5,
+                    },
+                ],
+                "displayName": "Gemini Models",
+                "description": "Models within this group: Gemini Flash, Gemini Pro",
+            },
+            {
+                "buckets": [
+                    {
+                        "bucketId": "3p-weekly",
+                        "displayName": "Weekly Limit Remaining",
+                        "window": "weekly",
+                        "resetTime": "2030-01-08T00:00:00Z",
+                        "remainingFraction": 1,
+                    },
+                    {
+                        "bucketId": "3p-5h",
+                        "displayName": "Five Hour Limit Remaining",
+                        "window": "5h",
+                        "resetTime": "2030-01-01T05:00:00Z",
+                        "remainingFraction": 1,
+                    },
+                ],
+                "displayName": "Claude and GPT models",
+                "description": "Models within this group: Claude Opus, Claude Sonnet, GPT-OSS",
+            },
+        ],
+        "description": "Within each group, models share a weekly limit and a 5-hour limit.",
+    }
+
     def test_summary_groups(self):
+        samples = by_key(_parse_summary(self.SUMMARY))
+        assert len(samples) == 4
+        assert samples[("seven_day", "gemini_models")].utilization == pytest.approx(0.25)
+        assert samples[("seven_day", "gemini_models")].resets_at == pytest.approx(1894060800.0)
+        assert samples[("five_hour", "gemini_models")].utilization == pytest.approx(0.5)
+        # The endpoint accepts integer as well as fractional values.
+        assert samples[("seven_day", "claude_and_gpt_models")].utilization == pytest.approx(0.0)
+        assert samples[("five_hour", "claude_and_gpt_models")].utilization == pytest.approx(0.0)
+        # The endpoint reports fractions only; there are no absolute counters.
+        assert all(s.used is None and s.limit is None for s in samples.values())
+
+    def test_unknown_window_and_bad_values_skipped(self):
         summary = {
             "groups": [
                 {
-                    "displayName": "Gemini 3 Pro",
+                    "displayName": "Gemini Models",
                     "buckets": [
-                        {
-                            "bucketId": "gemini-pro-5h",
-                            "window": "5h",
-                            "remainingFraction": 0.75,
-                            "resetTime": "2026-08-01T15:00:00Z",
-                        },
-                        {
-                            "bucketId": "gemini-pro-weekly",
-                            "window": "weekly",
-                            "remainingFraction": 0.9,
-                            "resetTime": "2026-08-04T00:00:00Z",
-                        },
+                        {"window": "monthly", "remainingFraction": 0.5},
+                        {"window": "5h", "remainingFraction": "not-a-number"},
+                        {"window": "5h", "remainingFraction": True},
+                        "not-a-dict",
                     ],
-                }
+                },
+                "not-a-dict",
             ]
         }
         samples = by_key(_parse_summary(summary))
-        assert samples[("five_hour", "gemini_3_pro")].utilization == pytest.approx(0.25)
-        assert samples[("seven_day", "gemini_3_pro")].utilization == pytest.approx(0.10)
-
-    def test_plain_buckets_fallback(self):
-        quota = [
-            {"modelId": "gemini-3-flash", "remainingFraction": 0.5, "resetTime": None},
-            {"tokenType": "TOKENS", "remainingFraction": 1.0},
-            {"remainingFraction": "not-a-number"},
-        ]
-        samples = by_key(_parse_buckets(quota))
-        assert samples[("bucket", "gemini_3_flash")].utilization == pytest.approx(0.5)
-        assert samples[("bucket", "tokens")].utilization == pytest.approx(0.0)
-        assert len(samples) == 2
+        assert list(samples) == [("monthly", "gemini_models")]
 
     def test_empty(self):
         assert _parse_summary({}) == []
-        assert _parse_buckets([]) == []
+        assert _parse_summary({"groups": []}) == []
+
+
+class TestGeminiCredentials:
+    def test_antigravity_token_file(self):
+        # Shape written by `agy`: nested token object, ISO-8601 expiry.
+        creds = _parse_antigravity_credentials(
+            {
+                "auth_method": "consumer",
+                "id_token": "eyJhbGc...",
+                "token": {
+                    "access_token": "ya29.a0-access",
+                    "refresh_token": "1//0g-refresh",
+                    "token_type": "Bearer",
+                    "expiry": "2030-01-01T02:00:00.123456789+02:00",
+                },
+            }
+        )
+        assert creds.access_token == "ya29.a0-access"
+        assert creds.refresh_token == "1//0g-refresh"
+        assert creds.expires_at == pytest.approx(1893456000.123456)
+        assert creds.client_id.startswith("1071006060591-")
+
+    def test_legacy_oauth_creds_file(self):
+        creds = _parse_legacy_credentials(
+            {"access_token": "ya29.legacy", "refresh_token": "1//legacy", "expiry_date": 1893456000000}
+        )
+        assert creds.expires_at == pytest.approx(1893456000.0)
+        assert creds.client_id.startswith("681255809395-")
+
+    def test_missing_and_malformed_fields(self):
+        empty = _parse_antigravity_credentials({})
+        assert empty.access_token is None and empty.refresh_token is None and empty.expires_at is None
+        assert _parse_antigravity_credentials({"token": "not-a-dict"}).access_token is None
+        assert _parse_legacy_credentials({"expiry_date": "soon"}).expires_at is None
+        # bool is an int subclass; it must not become an epoch.
+        assert _parse_legacy_credentials({"expiry_date": True}).expires_at is None
+
+    def test_usable_access_token_respects_expiry(self):
+        fresh = Credentials("tok", time.time() + 3600, "r", "cid", "sec")
+        assert fresh.usable_access_token() == "tok"
+        # The on-disk token is routinely stale; that must force a refresh
+        # rather than a doomed 401.
+        stale = Credentials("tok", time.time() - 1, "r", "cid", "sec")
+        assert stale.usable_access_token() is None
+        assert Credentials("tok", None, "r", "cid", "sec").usable_access_token() is None
+        assert Credentials(None, time.time() + 3600, "r", "cid", "sec").usable_access_token() is None
+
+
+class TestGeminiPlan:
+    def test_paid_tier_wins_over_current_tier(self):
+        # paidTier takes precedence over a default free currentTier.
+        response = {
+            "currentTier": {"id": "free-tier", "name": "Antigravity"},
+            "paidTier": {"id": "g1-pro-tier", "name": "Google AI Pro"},
+        }
+        assert _parse_plan(response) == ("pro", "g1-pro-tier")
+
+    def test_ultra(self):
+        assert _parse_plan({"paidTier": {"id": "g1-ultra-tier", "name": "Google AI Ultra"}}) == (
+            "ultra",
+            "g1-ultra-tier",
+        )
+
+    def test_no_subscription_falls_back_to_current_tier(self):
+        assert _parse_plan({"currentTier": {"id": "free-tier", "name": "Antigravity"}}) == (
+            "free",
+            "free-tier",
+        )
+
+    def test_absent(self):
+        assert _parse_plan({}) == (None, None)
 
 
 class TestJsonObject:
@@ -341,7 +509,9 @@ class TestCollectorDedup:
             QuotaSample(window="seven_day", scope="all", utilization=0.9),  # collision
             QuotaSample(window="five_hour", scope="all", utilization=0.1),
         ))
-        state = ProviderState(provider=_FakeProvider(), snapshot=snap, last_attempt=1.0, last_success=1.0)
+        state = ProviderState(
+            provider=_FakeProvider(), snapshot=snap, last_attempt=time.time(), last_success=time.time()
+        )
         poller = Poller(states=[state], interval=300)
 
         families = {f.name: f for f in QuotaCollector(poller).collect()}
@@ -352,3 +522,71 @@ class TestCollectorDedup:
         # first value wins
         first = next(s for s in util.samples if s.labels["window"] == "seven_day")
         assert first.value == pytest.approx(0.5)
+
+
+class TestDeepSeek:
+    # Balances arrive as decimal *strings*, not numbers.
+    def test_granted_allowance_and_serviceable(self):
+        payload = {
+            "is_available": True,
+            "balance_infos": [
+                {
+                    "currency": "USD",
+                    "total_balance": "3.50",
+                    "granted_balance": "5.00",
+                    "topped_up_balance": "0.00",
+                }
+            ],
+        }
+        granted, serviceable = parse_ds_balance(payload)
+        assert (granted.window, granted.scope) == ("granted", "all")
+        assert granted.utilization == pytest.approx(0.3)
+        assert granted.used == pytest.approx(1.5)
+        assert granted.limit == pytest.approx(5.0)
+        assert (serviceable.window, serviceable.utilization) == ("serviceable", 0.0)
+
+    def test_exhausted_account_saturates_serviceable(self):
+        # An unavailable account must export saturated utilization.
+        payload = {
+            "is_available": False,
+            "balance_infos": [
+                {
+                    "currency": "USD",
+                    "total_balance": "0.00",
+                    "granted_balance": "0.00",
+                    "topped_up_balance": "0.00",
+                }
+            ],
+        }
+        (serviceable,) = parse_ds_balance(payload)
+        assert (serviceable.window, serviceable.utilization) == ("serviceable", 1.0)
+
+    def test_topped_up_balance_reports_no_granted_window(self):
+        # No ceiling to divide by, so a ratio would be invented.
+        payload = {
+            "is_available": True,
+            "balance_infos": [
+                {
+                    "currency": "USD",
+                    "total_balance": "42.00",
+                    "granted_balance": "0.00",
+                    "topped_up_balance": "42.00",
+                }
+            ],
+        }
+        assert [s.window for s in parse_ds_balance(payload)] == ["serviceable"]
+
+    def test_non_usd_account_falls_back_to_first_entry(self):
+        payload = {
+            "is_available": True,
+            "balance_infos": [
+                {"currency": "CNY", "total_balance": "8.00", "granted_balance": "10.00"}
+            ],
+        }
+        granted, _ = parse_ds_balance(payload)
+        assert granted.utilization == pytest.approx(0.2)
+
+    def test_empty_and_malformed(self):
+        assert parse_ds_balance({}) == []
+        assert parse_ds_balance({"balance_infos": []}) == []
+        assert parse_ds_balance({"balance_infos": "nope"}) == []

@@ -51,6 +51,17 @@ in
       '';
     };
 
+    openaiAccounts = lib.mkOption {
+      type = lib.types.attrsOf lib.types.str;
+      default = { };
+      example = { account-a = "/var/lib/codex/account-a"; };
+      description = ''
+        Named OpenAI accounts mapped to absolute Codex home directories.
+        When set, these replace the default OpenAI credential path and export
+        provider labels such as openai-account-a, independent of CODEX_HOME.
+      '';
+    };
+
     home = lib.mkOption {
       type = lib.types.str;
       default = config.users.users.${cfg.user}.home or "/home/${cfg.user}";
@@ -76,14 +87,16 @@ in
       after = [ "network-online.target" ];
       wants = [ "network-online.target" ];
       serviceConfig = {
-        ExecStart = lib.escapeShellArgs [
+        ExecStart = lib.escapeShellArgs ([
           (lib.getExe cfg.package)
           "--listen-address" cfg.listenAddress
           "--port" (toString cfg.port)
           "--interval" (toString cfg.interval)
           "--providers" cfg.providers
           "--home" cfg.home
-        ];
+        ] ++ lib.concatLists (lib.mapAttrsToList (name: path: [
+          "--openai-account" "${name}=${path}"
+        ]) cfg.openaiAccounts));
         User = cfg.user;
         Group = config.users.users.${cfg.user}.group or "users";
         Restart = "on-failure";
