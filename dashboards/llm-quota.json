@@ -32,13 +32,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(llm_quota_utilization_ratio{provider=\"anthropic\"})",
-          "legendFormat": "max"
+          "expr": "max by (provider) (llm_quota_utilization_ratio{provider=\"anthropic\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}}",
+          "instant": true,
+          "range": false
         }
       ],
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "value",
@@ -71,11 +73,12 @@
                 "value": 0.9
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
-      "description": "Worst window utilization"
+      "description": "Current worst-window utilization from successful polls. Historical usage is shown in Quota history."
     },
     {
       "type": "stat",
@@ -94,16 +97,18 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(llm_quota_utilization_ratio{provider=\"openai\"})",
-          "legendFormat": "max"
+          "expr": "max by (provider) (llm_quota_utilization_ratio{provider=~\"openai(-.*)?\",scope=\"all\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}}",
+          "instant": true,
+          "range": false
         }
       ],
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
-        "textMode": "value",
+        "textMode": "value_and_name",
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
@@ -133,11 +138,12 @@
                 "value": 0.9
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
-      "description": "Worst window utilization"
+      "description": "Current worst-window utilization from successful polls. Historical usage is shown in Quota history."
     },
     {
       "type": "stat",
@@ -156,13 +162,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(llm_quota_utilization_ratio{provider=\"gemini\"})",
-          "legendFormat": "max"
+          "expr": "max by (provider) (llm_quota_utilization_ratio{provider=\"gemini\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}}",
+          "instant": true,
+          "range": false
         }
       ],
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "value",
@@ -195,11 +203,12 @@
                 "value": 0.9
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
-      "description": "Worst window utilization"
+      "description": "Current worst-window utilization from successful polls. Historical usage is shown in Quota history."
     },
     {
       "type": "stat",
@@ -218,13 +227,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(llm_quota_utilization_ratio{provider=\"grok\"})",
-          "legendFormat": "max"
+          "expr": "max by (provider) (llm_quota_utilization_ratio{provider=\"grok\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}}",
+          "instant": true,
+          "range": false
         }
       ],
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "value",
@@ -257,11 +268,12 @@
                 "value": 0.9
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
-      "description": "Worst window utilization"
+      "description": "Current worst-window utilization from successful polls. Historical usage is shown in Quota history."
     },
     {
       "type": "stat",
@@ -280,13 +292,15 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(llm_quota_utilization_ratio{provider=\"kimi\"})",
-          "legendFormat": "max"
+          "expr": "max by (provider) (llm_quota_utilization_ratio{provider=\"kimi\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}}",
+          "instant": true,
+          "range": false
         }
       ],
       "options": {
         "colorMode": "value",
-        "graphMode": "area",
+        "graphMode": "none",
         "justifyMode": "auto",
         "orientation": "auto",
         "textMode": "value",
@@ -319,11 +333,12 @@
                 "value": 0.9
               }
             ]
-          }
+          },
+          "noValue": "Unavailable"
         },
         "overrides": []
       },
-      "description": "Worst window utilization"
+      "description": "Current worst-window utilization from successful polls. Historical usage is shown in Quota history."
     },
     {
       "type": "stat",
@@ -1243,5 +1258,6 @@
         "refresh": 1
       }
     ]
-  }
+  },
+  "version": 1
 }

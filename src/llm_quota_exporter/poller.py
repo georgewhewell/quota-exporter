@@ -66,7 +66,10 @@ class Poller:
         provider = state.provider
         if not provider.available():
             with self.lock:
+                state.last_attempt = time.time()
+                state.last_duration = 0.0
                 state.last_error = f"credentials not found at {provider.credential_path()}"
+                state.consecutive_failures = 0
             log.debug("%s: skipped, %s", provider.name, state.last_error)
             return
 

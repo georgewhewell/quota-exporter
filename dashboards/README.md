@@ -14,8 +14,8 @@ Or provision it declaratively by dropping the file into a
 
 ## Panels
 
-- **Provider tiles** — worst-window utilization per provider, with a
-  sparkline and the soonest reset countdown.
+- **Provider tiles** — worst-window utilization per provider, from the latest successful poll; named OpenAI accounts are shown separately.
+  Failed polls show no current value. The next-reset tile shows the soonest countdown.
 - **Quota windows** — every window (`scope="all"`) as gradient gauge cells,
   sorted by pressure, with human-readable reset countdowns.
 - **Model caps** — model-scoped weekly caps and per-feature quotas.

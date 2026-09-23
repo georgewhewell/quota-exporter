@@ -19,12 +19,17 @@ displays. They can change or break at any time. Not affiliated with any provider
 |-----------|-------------------------------|----------|
 | anthropic | `~/.claude/.credentials.json` | `api.anthropic.com/api/oauth/usage` |
 | openai    | `~/.codex/auth.json`          | `chatgpt.com/backend-api/wham/usage` |
-| gemini    | `~/.gemini/oauth_creds.json`  | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota` |
+| gemini    | `~/.gemini/antigravity-cli/antigravity-oauth-token` (or legacy CLI credentials) | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` |
 | grok      | `~/.grok/auth.json`           | `cli-chat-proxy.grok.com/v1/billing` |
 | kimi      | `~/.kimi-code/credentials/…`  | `api.kimi.com/coding/v1/usages` |
+| deepseek  | `DEEPSEEK_API_KEY` or CLI credentials | `api.deepseek.com/user/balance` |
+| openrouter | `OPENROUTER_API_KEY` or CLI credentials | `openrouter.ai/api/v1/credits` and `/key` |
 
-Providers whose credentials are absent are skipped; a failing provider keeps
-its last snapshot with `llm_quota_scrape_success` 0 and backs off.
+Missing or expired credentials and failed polls report `llm_quota_scrape_success`
+0 without emitting old quota values. The last successful timestamp remains
+available for diagnostics. Snapshots also expire after two polling intervals
+(minimum 60 seconds) if polling stalls. Transient failures back off; credential
+gaps are retried at the normal interval.
 
 ## Run
 
@@ -36,6 +41,30 @@ $ nix run github:georgewhewell/quota-exporter -- --once
 Flake outputs: `packages.default`, `overlays.default`, `nixosModules.default`
 (`services.llm-quota-exporter`). Poll interval is decoupled from scrapes
 (default 300 s).
+
+### Multiple OpenAI accounts
+
+Configure any number of accounts, each with an arbitrary name and an absolute
+directory containing its `auth.json`:
+
+```console
+$ llm-quota-exporter --providers openai \
+    --openai-account account-a=/var/lib/codex/account-a \
+    --openai-account account-b=/var/lib/codex/account-b
+```
+
+This exports `provider="openai-account-a"` and `provider="openai-account-b"`.
+Explicit accounts replace the default `openai` provider and ignore `CODEX_HOME`
+and the `~/.codex` symlink. Without them, the existing single-account behavior
+is unchanged. Credentials are re-read on every poll; run the exporter beside
+the active CLI credentials, since copied tokens can expire independently.
+
+In NixOS, set `services.llm-quota-exporter.openaiAccounts` to an attribute set
+mapping account names to these directories. OpenAI tokens remain read-only:
+the exporter never consumes a refresh token or resets quota.
+
+Dashboard current-value panels should use instant queries. A range query
+reduced with `lastNotNull` can display a historical value after a failed poll.
 
 ## Metrics
 

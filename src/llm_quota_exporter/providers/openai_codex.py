@@ -42,7 +42,17 @@ _WINDOW_NAMES = {"primary_window": "primary", "secondary_window": "secondary"}
 class OpenAICodexProvider(Provider):
     name = "openai"
 
+    def __init__(
+        self, home: Path, client: httpx.Client, *, account: str | None = None, codex_home: Path | None = None
+    ) -> None:
+        super().__init__(home, client)
+        self._codex_home = codex_home
+        if account is not None:
+            self.name = f"openai-{account}"
+
     def credential_path(self) -> Path:
+        if self._codex_home is not None:
+            return self._codex_home / "auth.json"
         if codex_home := os.environ.get("CODEX_HOME"):
             return Path(codex_home) / "auth.json"
         return self._home / ".codex" / "auth.json"
@@ -91,7 +101,7 @@ class OpenAICodexProvider(Provider):
             raise CredentialsUnavailable(str(exc)) from exc
         except (OSError, json.JSONDecodeError) as exc:
             raise ProviderError(f"unreadable auth.json: {exc}") from exc
-        tokens = raw.get("tokens")
+        tokens = raw.get("tokens") if isinstance(raw, dict) else None
         if not isinstance(tokens, dict):
             raise CredentialsUnavailable("tokens section missing from auth.json (api-key login?)")
         return tokens
