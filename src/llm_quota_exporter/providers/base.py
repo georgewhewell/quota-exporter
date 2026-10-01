@@ -56,6 +56,8 @@ class ProviderSnapshot:
     spend_usd: float | None = None
     # Remaining prepaid credits in provider-native units.
     credits_balance: float | None = None
+    # Upstream model access is independent of any single quota window.
+    model_availability: Mapping[str, bool] = field(default_factory=dict)
 
 
 def json_object(response: httpx.Response, context: str) -> dict:

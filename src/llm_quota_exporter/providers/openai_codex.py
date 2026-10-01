@@ -5,8 +5,10 @@ CLI itself uses for its rate-limit display:
 
     GET https://chatgpt.com/backend-api/wham/usage
 
-primary_window is the short (5-hour) window, secondary_window the weekly one;
-both report used_percent (0-100), limit_window_seconds and reset_at (epoch s).
+Windows report used_percent (0-100), limit_window_seconds and reset_at (epoch
+s). Their duration, not their primary/secondary position, identifies them.
+Chatpass windows and model availability are separate from the main quota;
+an exhausted main quota does not imply that every model is unavailable.
 
 No token refresh is attempted: OpenAI rotates refresh tokens on use, so an
 out-of-band refresh that does not rewrite auth.json would invalidate the CLI's
@@ -86,13 +88,18 @@ class OpenAICodexProvider(Provider):
 
         payload = json_object(response, "usage endpoint")
         samples = tuple(_parse_usage(payload))
-        if not samples:
-            raise ProviderError("no rate-limit windows in usage response")
+        credits_balance = _parse_credits(payload)
+        model_availability = _parse_model_availability(payload)
+        if not samples and credits_balance is None and not model_availability:
+            raise ProviderError("no quota, credits or model availability in usage response")
 
         info = {}
         if plan := payload.get("plan_type"):
             info["plan"] = str(plan)
-        return ProviderSnapshot(samples=samples, info=info, credits_balance=_parse_credits(payload))
+        return ProviderSnapshot(
+            samples=samples, info=info, credits_balance=credits_balance,
+            model_availability=model_availability,
+        )
 
     def _read_tokens(self) -> dict[str, Any]:
         try:
@@ -112,26 +119,33 @@ def _parse_rate_limit(rate_limit: Any, scope: str) -> list[QuotaSample]:
     if not isinstance(rate_limit, dict):
         return samples
     for key, window_name in _WINDOW_NAMES.items():
-        window = rate_limit.get(key)
-        if not isinstance(window, dict):
-            continue
-        used_percent = window.get("used_percent")
-        if not isinstance(used_percent, (int, float)):
-            continue
-        samples.append(
-            QuotaSample(
-                window=_describe_window(window, window_name),
-                scope=scope,
-                utilization=used_percent / 100.0,
-                resets_at=float(reset_at) if isinstance(reset_at := window.get("reset_at"), (int, float)) else None,
-            )
-        )
+        if sample := _parse_window(rate_limit.get(key), window_name, scope):
+            samples.append(sample)
     return samples
+
+
+def _parse_window(window: Any, fallback: str, scope: str) -> QuotaSample | None:
+    if not isinstance(window, dict):
+        return None
+    used_percent = window.get("used_percent")
+    if not isinstance(used_percent, (int, float)) or isinstance(used_percent, bool):
+        return None
+    return QuotaSample(
+        window=_describe_window(window, fallback),
+        scope=scope,
+        utilization=used_percent / 100.0,
+        resets_at=float(reset_at) if isinstance(reset_at := window.get("reset_at"), (int, float)) else None,
+    )
 
 
 def _parse_usage(payload: dict[str, Any]) -> list[QuotaSample]:
     samples = _parse_rate_limit(payload.get("rate_limit"), "all")
     samples += _parse_rate_limit(payload.get("code_review_rate_limit"), "code_review")
+    chatpass = payload.get("chatpass")
+    if isinstance(chatpass, dict) and isinstance(windows := chatpass.get("windows"), list):
+        for window in windows:
+            if sample := _parse_window(window, "chatpass", "chatpass"):
+                samples.append(sample)
     for entry in payload.get("additional_rate_limits") or []:
         if not isinstance(entry, dict):
             continue
@@ -141,11 +155,23 @@ def _parse_usage(payload: dict[str, Any]) -> list[QuotaSample]:
 
 
 def _parse_credits(payload: dict[str, Any]) -> float | None:
-    balance = (payload.get("credits") or {}).get("balance")
+    credits = payload.get("credits")
+    balance = credits.get("balance") if isinstance(credits, dict) else None
     try:
         return float(balance)
     except (TypeError, ValueError):
         return None
+
+
+def _parse_model_availability(payload: dict[str, Any]) -> dict[str, bool]:
+    usage = payload.get("model_usage")
+    if not isinstance(usage, dict):
+        return {}
+    return {
+        model: status["available"]
+        for model, status in usage.items()
+        if isinstance(status, dict) and isinstance(status.get("available"), bool)
+    }
 
 
 def _slugify(name: str) -> str:

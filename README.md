@@ -70,8 +70,16 @@ reduced with `lastNotNull` can display a historical value after a failed poll.
 
 `llm_quota_utilization_ratio{provider,window,scope}` (0–1),
 `llm_quota_reset_timestamp_seconds`, `llm_quota_used` / `llm_quota_limit`,
-`llm_spend_usd`, `llm_credits_balance`, `llm_provider_info{plan,tier}`, and
+`llm_spend_usd`, `llm_credits_balance`, `llm_model_available{provider,model}`,
+`llm_provider_info{plan,tier}`, and
 `llm_quota_scrape_success` / `_last_success_timestamp_seconds` / `_poll_duration_seconds`.
+
+OpenAI's main quota (`scope="all"`), Chatpass windows (`scope="chatpass"`),
+credit balance, and model availability are independent readings. A main quota
+at 100% does not mean every model is unavailable. `llm_model_available` reports
+the upstream `model_usage` availability flag as 1 or 0; an absent flag emits no
+series. The dashboard shows model access, both quota scopes, and credits
+separately. Availability is hidden on failed or stale polls, just like usage.
 
 ## Credentials
 

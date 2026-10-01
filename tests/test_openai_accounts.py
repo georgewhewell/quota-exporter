@@ -167,3 +167,79 @@ def test_default_path_remains_compatible(tmp_path, monkeypatch):
 def test_invalid_config_fails_before_polling(args):
     with pytest.raises(SystemExit, match="2"):
         main(["--once", *args])
+
+
+def test_exhausted_quota_does_not_hide_model_access_or_chatpass(tmp_path):
+    write_auth(tmp_path, "account-a-id", "token")
+    payload = usage(100)
+    payload.update({
+        "chatpass": {"windows": [{
+            "used_percent": 25, "limit_window_seconds": 604800, "reset_at": 2000000100,
+        }]},
+        "model_usage": {"model-a": {"available": True}, "model-b": {"available": False}},
+        "credits": {"balance": "42.5"},
+    })
+    replies = [httpx.Response(200, json=payload), httpx.Response(401)]
+    with httpx.Client(transport=httpx.MockTransport(lambda _: replies.pop(0))) as client:
+        state = ProviderState(OpenAICodexProvider(tmp_path, client, account="account-a", codex_home=tmp_path))
+        poller = Poller([state], interval=300)
+        poller.poll_once()
+        metrics = exposition(poller)
+        assert 'scope="all",window="seven_day"} 1.0' in metrics
+        assert 'scope="chatpass",window="seven_day"} 0.25' in metrics
+        assert 'scope="chatpass",window="seven_day"} 2.0000001e+09' in metrics
+        assert 'llm_model_available{model="model-a",provider="openai-account-a"} 1.0' in metrics
+        assert 'llm_model_available{model="model-b",provider="openai-account-a"} 0.0' in metrics
+        assert 'llm_credits_balance{provider="openai-account-a"} 42.5' in metrics
+        assert 'window="five_hour"' not in metrics
+        state.last_success -= 601
+        assert 'llm_model_available{' not in exposition(poller)
+        state.last_success += 601
+        poller.poll_once()
+        metrics = exposition(poller)
+        assert 'llm_model_available{' not in metrics
+        assert 'llm_credits_balance{' not in metrics
+        assert 'llm_quota_utilization_ratio{' not in metrics
+
+
+@pytest.mark.parametrize("payload", [
+    {"model_usage": {"model-a": {"available": True}}},
+    {"model_usage": {"model-a": {"available": False}}},
+    {"credits": {"balance": "0"}},
+    {"chatpass": {"windows": [{"used_percent": 0, "limit_window_seconds": 604800}]}},
+])
+def test_openai_without_legacy_windows_still_exports(tmp_path, payload):
+    write_auth(tmp_path, "id", "token")
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))) as client:
+        state = ProviderState(OpenAICodexProvider(tmp_path, client, codex_home=tmp_path))
+        poller = Poller([state], interval=300)
+        poller.poll_once()
+        assert state.last_error is None
+        assert 'llm_quota_scrape_success{provider="openai"} 1.0' in exposition(poller)
+
+
+@pytest.mark.parametrize("chatpass", [None, [], "invalid", {"windows": None}, {"windows": {}},
+                                     {"windows": [None, {}, {"used_percent": True}]}])
+def test_malformed_optional_usage_does_not_break_main_quota(tmp_path, chatpass):
+    write_auth(tmp_path, "id", "token")
+    payload = usage(40)
+    payload.update({
+        "chatpass": chatpass,
+        "model_usage": {"model-a": None, "model-b": {"available": "false"}},
+        "credits": [],
+    })
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=payload))) as client:
+        snapshot = OpenAICodexProvider(tmp_path, client, codex_home=tmp_path).fetch()
+    assert len(snapshot.samples) == 1
+    assert snapshot.samples[0].utilization == 0.4
+    assert snapshot.model_availability == {}
+    assert snapshot.credits_balance is None
+
+
+def test_unknown_usage_response_is_not_success(tmp_path):
+    write_auth(tmp_path, "id", "token")
+    with httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={}))) as client:
+        state = ProviderState(OpenAICodexProvider(tmp_path, client, codex_home=tmp_path))
+        poller = Poller([state], interval=300)
+        poller.poll_once()
+        assert 'llm_quota_scrape_success{provider="openai"} 0.0' in exposition(poller)
