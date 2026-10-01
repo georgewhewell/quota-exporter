@@ -66,6 +66,11 @@ class QuotaCollector(Collector):
             "Remaining prepaid credits in provider-native units, where reported",
             labels=["provider"],
         )
+        model_available = GaugeMetricFamily(
+            "llm_model_available",
+            "Whether the provider currently reports access to a model (independent of quota utilization)",
+            labels=["provider", "model"],
+        )
 
         with self._poller.lock:
             for state in self._poller.states:
@@ -94,6 +99,8 @@ class QuotaCollector(Collector):
                     spend.add_metric([name], snapshot.spend_usd)
                 if snapshot.credits_balance is not None:
                     credits.add_metric([name], snapshot.credits_balance)
+                for model, available in snapshot.model_availability.items():
+                    model_available.add_metric([name, model], float(available))
                 # Guard against colliding (window, scope) tuples from a
                 # provider: a duplicate series makes Prometheus reject the
                 # whole scrape, which would take down every other metric too.
@@ -112,4 +119,6 @@ class QuotaCollector(Collector):
                     if sample.limit is not None:
                         limit.add_metric(labels, sample.limit)
 
-        return [utilization, resets_at, info, success, last_success, duration, used, limit, spend, credits]
+        return [
+            utilization, resets_at, info, success, last_success, duration, used, limit, spend, credits, model_available,
+        ]

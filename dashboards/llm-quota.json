@@ -82,7 +82,7 @@
     },
     {
       "type": "stat",
-      "title": "openai",
+      "title": "openai access",
       "id": 2,
       "gridPos": {
         "h": 5,
@@ -97,8 +97,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (provider) (llm_quota_utilization_ratio{provider=~\"openai(-.*)?\",scope=\"all\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
-          "legendFormat": "{{provider}}",
+          "expr": "max by (provider, model) (llm_model_available{provider=~\"openai(-.*)?\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}} \u00b7 {{model}}",
           "instant": true,
           "range": false
         }
@@ -118,7 +118,7 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
+          "unit": "none",
           "decimals": 0,
           "min": 0,
           "max": 1,
@@ -126,24 +126,35 @@
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "red",
                 "value": null
               },
               {
-                "color": "#eda100",
-                "value": 0.7
-              },
-              {
-                "color": "red",
-                "value": 0.9
+                "color": "green",
+                "value": 1
               }
             ]
           },
-          "noValue": "Unavailable"
+          "noValue": "Not reported",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Unavailable",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "Available",
+                  "color": "green"
+                }
+              }
+            }
+          ]
         },
         "overrides": []
       },
-      "description": "Current worst-window utilization from successful polls. Historical usage is shown in Quota history."
+      "description": "Model access reported by OpenAI, independent of the main quota window. A full main quota can coexist with available models and remaining credits."
     },
     {
       "type": "stat",
@@ -384,6 +395,187 @@
       "description": "Soonest quota window reset"
     },
     {
+      "type": "stat",
+      "title": "OpenAI main quota used",
+      "id": 18,
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (provider, window) (llm_quota_utilization_ratio{provider=~\"openai(-.*)?\",scope=\"all\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}} \u00b7 {{window}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#eda100",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "noValue": "Not reported"
+        },
+        "overrides": []
+      },
+      "description": "Main quota reported by OpenAI. Reaching 100% here does not establish model unavailability; model access and credits are shown separately."
+    },
+    {
+      "type": "stat",
+      "title": "OpenAI Chatpass quota used",
+      "id": 19,
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 5
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (provider, window) (llm_quota_utilization_ratio{provider=~\"openai(-.*)?\",scope=\"chatpass\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}} \u00b7 {{window}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#eda100",
+                "value": 0.7
+              },
+              {
+                "color": "red",
+                "value": 0.9
+              }
+            ]
+          },
+          "noValue": "Not reported"
+        },
+        "overrides": []
+      },
+      "description": "Separate Chatpass windows reported by OpenAI. This is independent of the main quota and is not a general model-availability percentage."
+    },
+    {
+      "type": "stat",
+      "title": "OpenAI credits remaining",
+      "id": 20,
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "${datasource}"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (provider) (llm_credits_balance{provider=~\"openai(-.*)?\"} and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "legendFormat": "{{provider}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "min": 0,
+          "noValue": "Not reported",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          }
+        },
+        "overrides": []
+      },
+      "description": "Remaining credits as reported by OpenAI, in native credit units. Credit balances are separate from percentage quota windows."
+    },
+    {
       "type": "table",
       "title": "Quota windows",
       "id": 7,
@@ -391,7 +583,7 @@
         "h": 9,
         "w": 14,
         "x": 0,
-        "y": 5
+        "y": 10
       },
       "datasource": {
         "type": "datasource",
@@ -570,7 +762,7 @@
         "h": 9,
         "w": 10,
         "x": 14,
-        "y": 5
+        "y": 10
       },
       "datasource": {
         "type": "datasource",
@@ -580,7 +772,7 @@
         {
           "refId": "A",
           "instant": true,
-          "expr": "sort_desc(llm_quota_utilization_ratio{scope!=\"all\"})",
+          "expr": "sort_desc(llm_quota_utilization_ratio{scope!~\"all|chatpass\"})",
           "legendFormat": "{{provider}} \u00b7 {{scope}}"
         }
       ],
@@ -634,7 +826,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 31
+        "y": 36
       },
       "datasource": {
         "type": "datasource",
@@ -782,7 +974,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 31
+        "y": 36
       },
       "datasource": {
         "type": "datasource",
@@ -847,7 +1039,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 23
+        "y": 28
       },
       "datasource": {
         "type": "datasource",
@@ -951,7 +1143,7 @@
         "h": 8,
         "w": 10,
         "x": 8,
-        "y": 23
+        "y": 28
       },
       "datasource": {
         "type": "datasource",
@@ -1004,7 +1196,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 23
+        "y": 28
       },
       "datasource": {
         "type": "datasource",
@@ -1086,7 +1278,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 14
+        "y": 19
       },
       "datasource": {
         "type": "datasource",
