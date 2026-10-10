@@ -71,6 +71,31 @@ class QuotaCollector(Collector):
             "Whether the provider currently reports access to a model (independent of quota utilization)",
             labels=["provider", "model"],
         )
+        credits_next_expiry = GaugeMetricFamily(
+            "llm_credits_next_expiry_timestamp_seconds",
+            "Unix time at which the next part of the prepaid credit balance expires, where reported",
+            labels=["provider"],
+        )
+        resets_available = GaugeMetricFamily(
+            "llm_rate_limit_resets_available",
+            "Banked rate-limit resets that can be redeemed on demand",
+            labels=["provider"],
+        )
+        grant_expiry = GaugeMetricFamily(
+            "llm_grant_expiry_timestamp_seconds",
+            "Unix time at which an individual grant (banked reset, promo credit) expires",
+            labels=["provider", "kind", "id"],
+        )
+        grant_granted = GaugeMetricFamily(
+            "llm_grant_granted_timestamp_seconds",
+            "Unix time at which an individual grant was issued",
+            labels=["provider", "kind", "id"],
+        )
+        grant_remaining = GaugeMetricFamily(
+            "llm_grant_remaining",
+            "Unspent amount of a monetary grant in major currency units",
+            labels=["provider", "kind", "id", "currency"],
+        )
 
         with self._poller.lock:
             for state in self._poller.states:
@@ -101,6 +126,22 @@ class QuotaCollector(Collector):
                     credits.add_metric([name], snapshot.credits_balance)
                 for model, available in snapshot.model_availability.items():
                     model_available.add_metric([name, model], float(available))
+                if snapshot.credits_next_expiry is not None:
+                    credits_next_expiry.add_metric([name], snapshot.credits_next_expiry)
+                if snapshot.resets_available is not None:
+                    resets_available.add_metric([name], float(snapshot.resets_available))
+                seen_grants: set[tuple[str, str]] = set()
+                for grant in snapshot.grants:
+                    if (grant.kind, grant.id) in seen_grants:
+                        continue
+                    seen_grants.add((grant.kind, grant.id))
+                    grant_labels = [name, grant.kind, grant.id]
+                    if grant.expires_at is not None:
+                        grant_expiry.add_metric(grant_labels, grant.expires_at)
+                    if grant.granted_at is not None:
+                        grant_granted.add_metric(grant_labels, grant.granted_at)
+                    if grant.remaining is not None:
+                        grant_remaining.add_metric([*grant_labels, grant.currency], grant.remaining)
                 # Guard against colliding (window, scope) tuples from a
                 # provider: a duplicate series makes Prometheus reject the
                 # whole scrape, which would take down every other metric too.
@@ -121,4 +162,5 @@ class QuotaCollector(Collector):
 
         return [
             utilization, resets_at, info, success, last_success, duration, used, limit, spend, credits, model_available,
+            credits_next_expiry, resets_available, grant_expiry, grant_granted, grant_remaining,
         ]

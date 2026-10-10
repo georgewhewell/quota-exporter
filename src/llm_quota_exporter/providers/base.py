@@ -49,6 +49,25 @@ class QuotaSample:
 
 
 @dataclass(frozen=True, slots=True)
+class Grant:
+    """A discrete allowance with its own lifetime, e.g. a banked rate-limit
+    reset (OpenAI) or a promotional credit tranche (Anthropic).
+
+    kind groups grants of the same nature ("rate_limit_reset", "promo_credit");
+    id distinguishes grants within a kind. Timestamps are unix seconds.
+    remaining is in major currency units for monetary grants and None for
+    count-like grants (one reset is one reset).
+    """
+
+    kind: str
+    id: str
+    expires_at: float | None = None
+    granted_at: float | None = None
+    remaining: float | None = None
+    currency: str = ""
+
+
+@dataclass(frozen=True, slots=True)
 class ProviderSnapshot:
     samples: tuple[QuotaSample, ...]
     info: Mapping[str, str] = field(default_factory=dict)
@@ -56,8 +75,14 @@ class ProviderSnapshot:
     spend_usd: float | None = None
     # Remaining prepaid credits in provider-native units.
     credits_balance: float | None = None
+    # Earliest expiry across the prepaid balance, where the provider reports it.
+    credits_next_expiry: float | None = None
     # Upstream model access is independent of any single quota window.
     model_availability: Mapping[str, bool] = field(default_factory=dict)
+    # Banked rate-limit resets the user can redeem on demand.
+    resets_available: int | None = None
+    # Individually expiring allowances (banked resets, promo credit tranches).
+    grants: tuple[Grant, ...] = ()
 
 
 def json_object(response: httpx.Response, context: str) -> dict:
