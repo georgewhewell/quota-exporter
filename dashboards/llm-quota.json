@@ -1436,6 +1436,231 @@
           }
         ]
       }
+    },
+    {
+      "type": "stat",
+      "title": "Banked rate-limit resets",
+      "id": 21,
+      "gridPos": {
+        "h": 7,
+        "w": 6,
+        "x": 0,
+        "y": 44
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "${datasource}"
+      },
+      "description": "Rate-limit resets that can be redeemed on demand (OpenAI 'Reset usage'). Each one expires individually; see the grants table.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (provider) (llm_rate_limit_resets_available and on (job, instance, provider) (llm_quota_scrape_success == 1))",
+          "instant": true,
+          "range": false,
+          "legendFormat": "{{provider}}",
+          "datasource": {
+            "type": "datasource",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "value_and_name",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "noValue": "None",
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "table",
+      "title": "Grants (banked resets, promo credits)",
+      "id": 22,
+      "gridPos": {
+        "h": 7,
+        "w": 18,
+        "x": 6,
+        "y": 44
+      },
+      "datasource": {
+        "type": "datasource",
+        "uid": "${datasource}"
+      },
+      "description": "Individually expiring allowances: OpenAI banked resets and Anthropic promotional credit tranches. Sorted by expiry.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "llm_grant_expiry_timestamp_seconds * 1000 and on (job, instance, provider) (llm_quota_scrape_success == 1)",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "datasource": {
+            "type": "datasource",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "refId": "B",
+          "expr": "llm_grant_expiry_timestamp_seconds - time() and on (job, instance, provider) (llm_quota_scrape_success == 1)",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "datasource": {
+            "type": "datasource",
+            "uid": "${datasource}"
+          }
+        },
+        {
+          "refId": "C",
+          "expr": "llm_grant_remaining and on (job, instance, provider) (llm_quota_scrape_success == 1)",
+          "instant": true,
+          "range": false,
+          "format": "table",
+          "datasource": {
+            "type": "datasource",
+            "uid": "${datasource}"
+          }
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true
+            },
+            "indexByName": {
+              "provider": 0,
+              "kind": 1,
+              "id": 2,
+              "Value #A": 3,
+              "Value #B": 4,
+              "Value #C": 5,
+              "currency": 6
+            },
+            "renameByName": {
+              "Value #A": "expires",
+              "Value #B": "time left",
+              "Value #C": "remaining"
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "expires",
+                "desc": false
+              }
+            ]
+          }
+        }
+      ],
+      "options": {
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "expires"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "time left"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dtdurations"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-text"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 259200
+                    },
+                    {
+                      "color": "green",
+                      "value": 604800
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "remaining"
+            },
+            "properties": [
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      }
     }
   ],
   "templating": {

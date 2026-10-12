@@ -10,6 +10,14 @@ s). Their duration, not their primary/secondary position, identifies them.
 Chatpass windows and model availability are separate from the main quota;
 an exhausted main quota does not imply that every model is unavailable.
 
+Banked rate-limit resets are counted in the usage payload
+(rate_limit_reset_credits.available_count). When any exist, their grant and
+expiry dates are listed with a second read-only request:
+
+    GET https://chatgpt.com/backend-api/wham/rate-limit-reset-credits
+
+Redeeming a reset is a separate POST that this exporter never makes.
+
 No token refresh is attempted: OpenAI rotates refresh tokens on use, so an
 out-of-band refresh that does not rewrite auth.json would invalidate the CLI's
 own login. On 401 we fail the cycle and recover once the codex CLI refreshes
@@ -19,15 +27,19 @@ its credentials.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from .._time import parse_iso8601
 from .base import (
     CredentialsUnavailable,
+    Grant,
     Provider,
     ProviderError,
     ProviderSnapshot,
@@ -35,7 +47,12 @@ from .base import (
     json_object,
 )
 
+log = logging.getLogger(__name__)
+
 USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
+# Lists banked rate-limit resets with grant/expiry dates (codex-rs
+# backend-client/src/client/rate_limit_resets.rs, list_rate_limit_reset_credits).
+RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 USER_AGENT = "codex-cli"
 
 _WINDOW_NAMES = {"primary_window": "primary", "secondary_window": "secondary"}
@@ -93,13 +110,39 @@ class OpenAICodexProvider(Provider):
         if not samples and credits_balance is None and not model_availability:
             raise ProviderError("no quota, credits or model availability in usage response")
 
+        resets_available = _parse_reset_summary(payload)
+        grants: tuple[Grant, ...] = ()
+        if resets_available:
+            # Details are only worth a second request when there is something
+            # to list; a failure here must not discard the quota reading.
+            details = self._fetch_reset_credits(headers)
+            if details is not None:
+                resets_available, grants = details
+
         info = {}
         if plan := payload.get("plan_type"):
             info["plan"] = str(plan)
         return ProviderSnapshot(
             samples=samples, info=info, credits_balance=credits_balance,
             model_availability=model_availability,
+            resets_available=resets_available, grants=grants,
         )
+
+    def _fetch_reset_credits(self, headers: dict[str, str]) -> tuple[int, tuple[Grant, ...]] | None:
+        """List banked resets (read-only GET; redeeming is a separate POST we never make)."""
+        try:
+            response = self._client.get(RESET_CREDITS_URL, headers=headers)
+        except httpx.HTTPError as exc:
+            log.warning("%s: reset credit listing failed: %s", self.name, exc)
+            return None
+        if response.status_code != 200:
+            log.warning("%s: reset credit listing returned HTTP %d", self.name, response.status_code)
+            return None
+        try:
+            return _parse_reset_credits(json_object(response, "reset credits endpoint"))
+        except ProviderError as exc:
+            log.warning("%s: %s", self.name, exc)
+            return None
 
     def _read_tokens(self) -> dict[str, Any]:
         try:
@@ -172,6 +215,46 @@ def _parse_model_availability(payload: dict[str, Any]) -> dict[str, bool]:
         for model, status in usage.items()
         if isinstance(status, dict) and isinstance(status.get("available"), bool)
     }
+
+
+def _parse_reset_summary(payload: dict[str, Any]) -> int | None:
+    """Banked reset count from the usage payload's rate_limit_reset_credits."""
+    summary = payload.get("rate_limit_reset_credits")
+    count = summary.get("available_count") if isinstance(summary, dict) else None
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        return count
+    return None
+
+
+def _parse_reset_credits(payload: dict[str, Any]) -> tuple[int, tuple[Grant, ...]]:
+    """Available banked resets from GET wham/rate-limit-reset-credits.
+
+    Redeemed, expired or in-flight credits are dropped: the metric answers
+    "what can I still use, and until when".
+    """
+    credits = payload.get("credits")
+    if not isinstance(credits, list):
+        raise ProviderError("reset credits endpoint: no credits list")
+    grants = []
+    now = time.time()
+    for credit in credits:
+        if not isinstance(credit, dict) or credit.get("status") != "available":
+            continue
+        if not isinstance(credit_id := credit.get("id"), str) or not credit_id:
+            continue
+        expires_at = parse_iso8601(credit.get("expires_at"))
+        if expires_at is not None and expires_at <= now:
+            continue
+        grants.append(Grant(
+            kind="rate_limit_reset",
+            id=credit_id.removeprefix("RateLimitResetCredit_"),
+            expires_at=expires_at,
+            granted_at=parse_iso8601(credit.get("granted_at")),
+        ))
+    count = payload.get("available_count")
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0:
+        count = len(grants)
+    return count, tuple(grants)
 
 
 def _slugify(name: str) -> str:

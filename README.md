@@ -81,6 +81,36 @@ the upstream `model_usage` availability flag as 1 or 0; an absent flag emits no
 series. The dashboard shows model access, both quota scopes, and credits
 separately. Availability is hidden on failed or stale polls, just like usage.
 
+### Banked resets and promotional credits
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `llm_rate_limit_resets_available` | `provider` | Banked rate-limit resets you can redeem now (OpenAI "Reset usage") |
+| `llm_grant_expiry_timestamp_seconds` | `provider,kind,id` | When an individual grant expires |
+| `llm_grant_granted_timestamp_seconds` | `provider,kind,id` | When it was issued (where reported) |
+| `llm_grant_remaining` | `provider,kind,id,currency` | Unspent amount of a monetary grant, in major units |
+| `llm_credits_next_expiry_timestamp_seconds` | `provider` | Next expiry within the prepaid balance |
+
+`kind="rate_limit_reset"` comes from OpenAI: the usage payload carries the
+count, and when it is non-zero a second GET to
+`wham/rate-limit-reset-credits` lists each reset's grant and expiry dates.
+Redeemed or expired resets are omitted. The exporter never redeems one.
+
+`kind="promo_credit"` comes from Anthropic's
+`api/oauth/organizations/:orgUUID/prepaid/credits`, which also feeds
+`llm_credits_balance{provider="anthropic"}` in USD. That endpoint only covers
+the claude.ai org that owns the Claude Code token. Monthly API credits granted
+to a linked Claude Console org are not visible to this token and are not
+exported yet.
+
+If either detail request fails, the main quota reading is still exported.
+
+Alert on resets about to lapse unused:
+
+```promql
+llm_grant_expiry_timestamp_seconds{kind="rate_limit_reset"} - time() < 3 * 86400
+```
+
 ## Credentials
 
 Tokens are only read, never logged or transmitted anywhere but the provider's
@@ -88,6 +118,13 @@ own endpoint. anthropic/openai are strictly read-only (they rotate refresh
 tokens with reuse detection, so an outside refresh can revoke a live CLI
 session); grok/kimi refresh only once the on-disk token has expired and persist
 the rotated pair; gemini refreshes in memory.
+
+If Claude quota disappears, check the exporter log for an expired on-disk
+token. Run Claude Code on the same machine and use `/usage` so the CLI can
+renew its own credentials; if it asks you to sign in, complete that login.
+The exporter re-reads the credential file on its next poll and resumes without
+a restart. `claude auth status` can still report a configured login while the
+saved access token has expired.
 
 A Grafana dashboard is in [`dashboards/`](dashboards/); the token/cost panels
 need the CLIs' OpenTelemetry metrics in the same store (optional).
