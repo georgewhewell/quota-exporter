@@ -4,6 +4,7 @@ import json
 import time
 
 import httpx
+import pytest
 from prometheus_client import CollectorRegistry, generate_latest
 
 from llm_quota_exporter._time import parse_iso8601
@@ -78,10 +79,15 @@ def codex_provider(tmp_path, respond):
         json.dumps({"tokens": {"access_token": "tok", "account_id": "acct"}})
     )
     client = httpx.Client(transport=httpx.MockTransport(respond))
-    return OpenAICodexProvider(tmp_path, client)
+    return OpenAICodexProvider(tmp_path, client, codex_home=tmp_path / ".codex")
 
 
 class TestCodexResets:
+    @pytest.fixture(autouse=True)
+    def fixed_grant_date(self, monkeypatch):
+        # Recorded grant fixtures should not change meaning as wall time passes.
+        monkeypatch.setattr(time, "time", lambda: 1791590400.0)  # 2026-10-10 UTC
+
     def test_parse_keeps_only_available_credits(self):
         count, grants = _parse_reset_credits(RESET_CREDITS)
         assert count == 2
@@ -150,6 +156,14 @@ class TestCodexResets:
         assert snapshot.samples  # the main reading survives
         assert snapshot.resets_available == 2
         assert snapshot.grants == ()
+
+    def test_expired_available_credit_is_not_exported(self):
+        count, grants = _parse_reset_credits({"credits": [{
+            "id": "RateLimitResetCredit_old", "status": "available",
+            "expires_at": "2000-01-01T00:00:00Z",
+        }]})
+        assert count == 0
+        assert grants == ()
 
 
 CLAUDE_USAGE = {"five_hour": {"utilization": 3.0, "resets_at": "2026-10-10T17:00:00+00:00"}}
@@ -236,3 +250,44 @@ class TestAnthropicPrepaid:
         assert snapshot.samples
         assert snapshot.credits_balance is None
         assert snapshot.grants == ()
+
+    @pytest.mark.parametrize("tranches", [123, "unexpected", {"remaining_amount_minor_units": 500}])
+    def test_malformed_prepaid_keeps_usage(self, tmp_path, tranches):
+        def respond(request):
+            if str(request.url) == ANTHROPIC_USAGE_URL:
+                return httpx.Response(200, json=CLAUDE_USAGE)
+            return httpx.Response(200, json={"amount": 500, "currency": "USD", "promo_tranches": tranches})
+
+        snapshot = self._provider(tmp_path, respond).fetch()
+        assert snapshot.samples
+        assert snapshot.credits_balance is None
+        assert snapshot.grants == ()
+
+    def test_expired_credentials_are_read_only_and_recover(self, tmp_path):
+        requests = []
+
+        def respond(request):
+            requests.append(request)
+            assert request.method == "GET"
+            assert request.headers["Authorization"] == "Bearer renewed-by-cli"
+            return httpx.Response(200, json=CLAUDE_USAGE if str(request.url) == ANTHROPIC_USAGE_URL else PREPAID_EMPTY)
+
+        provider = self._provider(tmp_path, respond)
+        credentials = provider.credential_path()
+        expired = json.dumps({"claudeAiOauth": {"accessToken": "expired", "expiresAt": 1}})
+        credentials.write_text(expired)
+        state = ProviderState(provider)
+        poller = Poller([state], interval=300)
+        poller.poll_once()
+        assert not requests
+        assert state.last_error and "expired" in state.last_error
+        assert state.consecutive_failures == 0
+        assert credentials.read_text() == expired
+
+        credentials.write_text(json.dumps({"claudeAiOauth": {
+            "accessToken": "renewed-by-cli", "expiresAt": (time.time() + 3600) * 1000,
+        }}))
+        poller.poll_once()
+        assert state.last_error is None
+        assert state.snapshot.samples
+        assert len(requests) == 2

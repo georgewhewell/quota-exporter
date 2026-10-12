@@ -30,6 +30,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -235,15 +236,19 @@ def _parse_reset_credits(payload: dict[str, Any]) -> tuple[int, tuple[Grant, ...
     if not isinstance(credits, list):
         raise ProviderError("reset credits endpoint: no credits list")
     grants = []
+    now = time.time()
     for credit in credits:
         if not isinstance(credit, dict) or credit.get("status") != "available":
             continue
         if not isinstance(credit_id := credit.get("id"), str) or not credit_id:
             continue
+        expires_at = parse_iso8601(credit.get("expires_at"))
+        if expires_at is not None and expires_at <= now:
+            continue
         grants.append(Grant(
             kind="rate_limit_reset",
             id=credit_id.removeprefix("RateLimitResetCredit_"),
-            expires_at=parse_iso8601(credit.get("expires_at")),
+            expires_at=expires_at,
             granted_at=parse_iso8601(credit.get("granted_at")),
         ))
     count = payload.get("available_count")

@@ -119,6 +119,13 @@ tokens with reuse detection, so an outside refresh can revoke a live CLI
 session); grok/kimi refresh only once the on-disk token has expired and persist
 the rotated pair; gemini refreshes in memory.
 
+If Claude quota disappears, check the exporter log for an expired on-disk
+token. Run Claude Code on the same machine and use `/usage` so the CLI can
+renew its own credentials; if it asks you to sign in, complete that login.
+The exporter re-reads the credential file on its next poll and resumes without
+a restart. `claude auth status` can still report a configured login while the
+saved access token has expired.
+
 A Grafana dashboard is in [`dashboards/`](dashboards/); the token/cost panels
 need the CLIs' OpenTelemetry metrics in the same store (optional).
 

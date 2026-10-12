@@ -86,7 +86,7 @@ class AnthropicProvider(Provider):
         if tier := creds.get("rateLimitTier"):
             info["tier"] = str(tier)
         prepaid = self._prepaid_credits(token)
-        balance, next_expiry, grants = _parse_prepaid(prepaid) if prepaid is not None else (None, None, ())
+        balance, next_expiry, grants = prepaid if prepaid is not None else (None, None, ())
         return ProviderSnapshot(
             samples=samples, info=info, spend_usd=_parse_spend(usage),
             credits_balance=balance, credits_next_expiry=next_expiry, grants=grants,
@@ -120,7 +120,7 @@ class AnthropicProvider(Provider):
         except httpx.HTTPError as exc:
             raise ProviderError(f"usage request failed: {exc}") from exc
 
-    def _prepaid_credits(self, token: str) -> dict[str, Any] | None:
+    def _prepaid_credits(self, token: str) -> tuple[float | None, float | None, tuple[Grant, ...]] | None:
         """Best-effort read of the org's prepaid balance; never fails the poll."""
         try:
             response = self._get(PREPAID_CREDITS_URL, token)
@@ -131,7 +131,7 @@ class AnthropicProvider(Provider):
             log.warning("%s: prepaid credits returned HTTP %d", self.name, response.status_code)
             return None
         try:
-            return json_object(response, "prepaid credits endpoint")
+            return _parse_prepaid(json_object(response, "prepaid credits endpoint"))
         except ProviderError as exc:
             log.warning("%s: %s", self.name, exc)
             return None
@@ -238,7 +238,10 @@ def _parse_prepaid(prepaid: dict[str, Any]) -> tuple[float | None, float | None,
     grants: list[Grant] = []
     seen: set[str] = set()
     now = time.time()
-    for index, tranche in enumerate(prepaid.get("promo_tranches") or []):
+    tranches = prepaid.get("promo_tranches")
+    if tranches is not None and not isinstance(tranches, list):
+        raise ProviderError("prepaid credits endpoint: promo_tranches must be a list or null")
+    for index, tranche in enumerate(tranches or []):
         if not isinstance(tranche, dict):
             continue
         remaining = tranche.get("remaining_amount_minor_units")
