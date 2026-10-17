@@ -7,11 +7,17 @@ API the CLI uses for its own quota display:
 
     POST https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist
     POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary
+    POST https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota
 
-The summary reports one group per model family ("Gemini Models", "Claude and
-GPT models"), each with a "5h" and a "weekly" bucket carrying
-remainingFraction (0..1, remaining -- inverted here to utilization) and a
-resetTime. There are no absolute counters, so used/limit stay unset.
+Two quota signals are exported:
+
+1. Group summary: one group per model family ("Gemini Models", "Claude and
+   GPT models"), each with a "5h" and a "weekly" bucket carrying
+   remainingFraction (0..1, remaining -- inverted here to utilization) and a
+   resetTime. There are no absolute counters, so used/limit stay unset.
+2. Per-model buckets from retrieveUserQuota, the source the CLI's own quota
+   manager refreshes for the model picker. These kept moving after the group
+   summary's 5h buckets went stale (server-side migration in Oct 2026).
 
 Quota requests use the Antigravity client identity. The provider requires
 retrieveUserQuotaSummary rather than falling back to the legacy quota list,
@@ -135,12 +141,19 @@ class GeminiProvider(Provider):
             self._load_code_assist(token)
 
         summary = self._post(token, "retrieveUserQuotaSummary", {"project": self._project or ""})
-        samples = tuple(_parse_summary(summary))
+        samples = list(_parse_summary(summary))
+        try:
+            quota = self._post(token, "retrieveUserQuota", {"project": self._project or ""})
+        except ProviderError as exc:
+            # Per-model buckets are additive; the group summary still stands.
+            log.warning("gemini: per-model quota unavailable: %s", exc)
+        else:
+            samples.extend(_parse_quota_buckets(quota))
         if not samples:
-            raise ProviderError("retrieveUserQuotaSummary returned no usable buckets")
+            raise ProviderError("no usable quota samples from summary or per-model sources")
 
         info = {k: v for k, v in (("plan", self._plan), ("tier", self._tier)) if v}
-        return ProviderSnapshot(samples=samples, info=info)
+        return ProviderSnapshot(samples=tuple(samples), info=info)
 
     def _get_access_token(self) -> str:
         if self._access_token and time.time() < self._access_token_expiry - 60:
@@ -314,6 +327,37 @@ def _parse_summary(summary: dict[str, Any]) -> list[QuotaSample]:
                     resets_at=parse_iso8601(bucket.get("resetTime")),
                 )
             )
+    return samples
+
+
+def _parse_quota_buckets(payload: dict[str, Any]) -> list[QuotaSample]:
+    """Per-model quota from retrieveUserQuota, the model picker's own source.
+
+    Buckets without a resetTime (chat_*, tab_*) are auxiliary features that
+    are never debited against a window; with no reset there is no window to
+    report, so they are skipped.
+    """
+    samples: list[QuotaSample] = []
+    for bucket in payload.get("buckets") or []:
+        if not isinstance(bucket, dict):
+            continue
+        model = bucket.get("modelId")
+        remaining = bucket.get("remainingFraction")
+        resets_at = parse_iso8601(bucket.get("resetTime"))
+        if not isinstance(model, str) or not model:
+            continue
+        if not isinstance(remaining, (int, float)) or isinstance(remaining, bool):
+            continue
+        if resets_at is None:
+            continue
+        samples.append(
+            QuotaSample(
+                window="five_hour",
+                scope=_slugify(model),
+                utilization=1.0 - float(remaining),
+                resets_at=resets_at,
+            )
+        )
     return samples
 
 
