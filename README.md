@@ -19,7 +19,7 @@ displays. They can change or break at any time. Not affiliated with any provider
 |-----------|-------------------------------|----------|
 | anthropic | `~/.claude/.credentials.json` | `api.anthropic.com/api/oauth/usage` |
 | openai    | `~/.codex/auth.json`          | `chatgpt.com/backend-api/wham/usage` |
-| gemini    | `~/.gemini/antigravity-cli/antigravity-oauth-token` (or legacy CLI credentials) | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` |
+| gemini    | `~/.gemini/antigravity-cli/antigravity-oauth-token` (or legacy CLI credentials) | `cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary` + `:retrieveUserQuota` (per-model) |
 | grok      | `~/.grok/auth.json`           | `cli-chat-proxy.grok.com/v1/billing` |
 | kimi      | `~/.kimi-code/credentials/…`  | `api.kimi.com/coding/v1/usages` |
 | deepseek  | `DEEPSEEK_API_KEY` or CLI credentials | `api.deepseek.com/user/balance` |

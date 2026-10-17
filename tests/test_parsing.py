@@ -14,6 +14,7 @@ from llm_quota_exporter.providers.gemini import (
     _parse_antigravity_credentials,
     _parse_legacy_credentials,
     _parse_plan,
+    _parse_quota_buckets,
     _parse_summary,
 )
 from llm_quota_exporter.providers.grok import _parse_monthly, _parse_weekly
@@ -388,6 +389,51 @@ class TestGemini:
     def test_empty(self):
         assert _parse_summary({}) == []
         assert _parse_summary({"groups": []}) == []
+
+
+class TestGeminiQuotaBuckets:
+    # Synthetic retrieveUserQuota fixture shaped like the real response.
+    PAYLOAD: ClassVar[dict] = {
+        "buckets": [
+            {"tokenType": "WTUS", "modelId": "chat_20706", "remainingFraction": 1},
+            {
+                "resetTime": "2030-01-01T05:00:00Z",
+                "tokenType": "WTUS",
+                "modelId": "claude-sonnet-5-5-medium",
+                "remainingFraction": 0.25,
+            },
+            {
+                "resetTime": "2030-01-01T05:00:00Z",
+                "tokenType": "WTUS",
+                "modelId": "gemini-3.1-pro-high",
+                "remainingFraction": 1,
+            },
+        ]
+    }
+
+    def test_per_model_buckets(self):
+        samples = by_key(_parse_quota_buckets(self.PAYLOAD))
+        assert set(samples) == {("five_hour", "claude_sonnet_5_5_medium"), ("five_hour", "gemini_3_1_pro_high")}
+        assert samples[("five_hour", "claude_sonnet_5_5_medium")].utilization == pytest.approx(0.75)
+        assert samples[("five_hour", "claude_sonnet_5_5_medium")].resets_at == pytest.approx(1893474000.0)
+        assert samples[("five_hour", "gemini_3_1_pro_high")].utilization == pytest.approx(0.0)
+
+    def test_malformed_buckets_skipped(self):
+        payload = {
+            "buckets": [
+                {"modelId": "gemini-3-flash", "remainingFraction": "full"},
+                {"modelId": "gemini-3-flash", "remainingFraction": True},
+                {"remainingFraction": 0.5, "resetTime": "2030-01-01T05:00:00Z"},
+                {"modelId": "", "remainingFraction": 0.5, "resetTime": "2030-01-01T05:00:00Z"},
+                {"modelId": "gemini-3-flash", "remainingFraction": 0.5, "resetTime": "soon"},
+                "not-a-dict",
+            ]
+        }
+        assert _parse_quota_buckets(payload) == []
+
+    def test_empty(self):
+        assert _parse_quota_buckets({}) == []
+        assert _parse_quota_buckets({"buckets": []}) == []
 
 
 class TestGeminiCredentials:
